@@ -1,0 +1,12 @@
+streamlit
+pandas
+openpyxl
+openai
+playwright
+pytesseract
+opencv-python-headless
+beautifulsoup4
+requests
+Pillow
+PyGithub
+cryptography

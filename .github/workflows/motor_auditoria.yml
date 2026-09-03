@@ -1,0 +1,102 @@
+name: Motor de Auditoría Concurrente (5 Hilos)
+
+on:
+  push:
+    paths:
+      - 'inputs/matriz_a_procesar.xlsx.enc'
+
+permissions:
+  contents: write
+
+jobs:
+  procesar-datos:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 1️⃣ Clonar Repositorio
+        uses: actions/checkout@v4
+
+      - name: 2️⃣ Configurar Entorno Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: 3️⃣ Instalar Servidor de OCR (Tesseract)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tesseract-ocr tesseract-ocr-spa
+
+      - name: 4️⃣ Instalar Dependencias del Proyecto
+        run: |
+          pip install -r requirements.txt
+          playwright install chromium
+          playwright install-deps chromium
+
+      - name: 🔓 4.5 Desencriptar Entrada y Caché
+        env:
+          ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
+        run: |
+          python -c "
+          import os
+          from cryptography.fernet import Fernet
+          
+          f = Fernet(os.environ['ENCRYPTION_KEY'])
+          
+          # Desencriptar Excel de entrada
+          if os.path.exists('inputs/matriz_a_procesar.xlsx.enc'):
+              with open('inputs/matriz_a_procesar.xlsx.enc', 'rb') as src:
+                  encrypted = src.read()
+              with open('inputs/matriz_a_procesar.xlsx', 'wb') as dst:
+                  dst.write(f.decrypt(encrypted))
+                  
+          # Desencriptar Caché JSON si existe previamente
+          if os.path.exists('historial_auditorias.json.enc'):
+              with open('historial_auditorias.json.enc', 'rb') as src:
+                  encrypted_json = src.read()
+              with open('historial_auditorias.json', 'wb') as dst:
+                  dst.write(f.decrypt(encrypted_json))
+          "
+
+      - name: 5️⃣ Iniciar Pool de Concurrencia (Python)
+        run: python core/ejecutar_pipeline.py
+
+      - name: 🔐 5.5 Encriptar Resultados y Limpiar
+        if: always()
+        env:
+          ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
+        run: |
+          python -c "
+          import os
+          from cryptography.fernet import Fernet
+          
+          f = Fernet(os.environ['ENCRYPTION_KEY'])
+          
+          # Encriptar Excel de salida si se generó
+          if os.path.exists('outputs/matriz_procesada.xlsx'):
+              with open('outputs/matriz_procesada.xlsx', 'rb') as src:
+                  data = src.read()
+              with open('outputs/matriz_procesada.xlsx.enc', 'wb') as dst:
+                  dst.write(f.encrypt(data))
+                  
+          # Encriptar Caché JSON actualizado
+          if os.path.exists('historial_auditorias.json'):
+              with open('historial_auditorias.json', 'rb') as src:
+                  data_json = src.read()
+              with open('historial_auditorias.json.enc', 'wb') as dst:
+                  dst.write(f.encrypt(data_json))
+          "
+
+      - name: 🧹 Limpiar Archivos Temporales en Texto Plano
+        if: always()
+        run: |
+          rm -f inputs/matriz_a_procesar.xlsx
+          rm -f outputs/matriz_procesada.xlsx
+          rm -f historial_auditorias.json
+
+      - name: 6️⃣ Persistir Resultados Cifrados en el Repositorio
+        if: always()
+        run: |
+          git config --global user.name "Bot Auditor CI/CD"
+          git config --global user.email "bot@senescyt-pipeline.com"
+          git add outputs/matriz_procesada.xlsx.enc historial_auditorias.json.enc
+          git commit -m "🚀 Checkpoint cifrado por GitHub Actions" || echo "No hay cambios para subir"
+          git push
